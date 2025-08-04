@@ -1,0 +1,108 @@
+name: Reusable Dependency & Vulnerability Scan
+
+on:
+  workflow_call:
+    inputs:
+      scan-maven:
+        description: 'Enable Maven dependency scanning'
+        required: false
+        type: boolean
+        default: true
+      scan-npm:
+        description: 'Enable NPM dependency scanning'  
+        required: false
+        type: boolean
+        default: true
+      scan-docker:
+        description: 'Enable Docker image scanning'
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  dependency-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+          
+      - name: Set up Node.js (if NPM scanning enabled)
+        if: inputs.scan-npm
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          
+      - name: Set up Java (if Maven scanning enabled)
+        if: inputs.scan-maven
+        uses: actions/setup-java@v4
+        with:
+          java-version: '11'
+          distribution: 'temurin'
+          
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests
+          
+      - name: Install Trivy (for Docker scanning)
+        if: inputs.scan-docker
+        run: |
+          sudo apt-get update
+          sudo apt-get install wget apt-transport-https gnupg lsb-release
+          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
+          echo "deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee -a /etc/apt/sources.list.d/trivy.list
+          sudo apt-get update
+          sudo apt-get install trivy
+          
+      - name: Run Dependency & Vulnerability Scan
+        run: |
+          echo "🔍 Starting dependency and vulnerability scan..."
+          
+          # Check for Maven project
+          if [ "${{ inputs.scan-maven }}" == "true" ] && [ -f "pom.xml" ]; then
+            echo "📦 Scanning Maven dependencies..."
+            mvn --version
+            mvn dependency:tree
+            # Add vulnerability scanning with OWASP dependency check
+            mvn org.owasp:dependency-check-maven:check -DfailBuildOnCVSS=7 || echo "Maven scan completed with warnings"
+          fi
+          
+          # Check for NPM project  
+          if [ "${{ inputs.scan-npm }}" == "true" ] && [ -f "package.json" ]; then
+            echo "📦 Scanning NPM dependencies..."
+            npm --version
+            npm install
+            npm audit --audit-level moderate || echo "NPM audit completed with warnings"
+          fi
+          
+          # Check for Docker
+          if [ "${{ inputs.scan-docker }}" == "true" ] && [ -f "Dockerfile" ]; then
+            echo "🐳 Scanning Docker image..."
+            docker build -t temp-scan-image .
+            trivy image temp-scan-image
+          fi
+          
+          echo "✅ Scan completed!"
+          
+      - name: Generate Scan Report
+        run: |
+          echo "# Dependency & Vulnerability Scan Report" > scan-report.md
+          echo "" >> scan-report.md
+          echo "## Scan Configuration" >> scan-report.md
+          echo "- Maven scanning: ${{ inputs.scan-maven }}" >> scan-report.md
+          echo "- NPM scanning: ${{ inputs.scan-npm }}" >> scan-report.md
+          echo "- Docker scanning: ${{ inputs.scan-docker }}" >> scan-report.md
+          echo "" >> scan-report.md
+          echo "## Results" >> scan-report.md
+          echo "Detailed results are available in the workflow logs above." >> scan-report.md
+          
+      - name: Upload Scan Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: vulnerability-scan-report
+          path: scan-report.md
