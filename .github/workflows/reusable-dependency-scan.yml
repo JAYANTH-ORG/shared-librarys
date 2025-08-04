@@ -36,8 +36,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '18'
-          cache: 'npm'
-          cache-dependency-path: '**/package-lock.json'
           
       - name: Set up Java (if Maven scanning enabled)
         if: inputs.scan-maven
@@ -45,41 +43,51 @@ jobs:
         with:
           java-version: '11'
           distribution: 'temurin'
-          cache: 'maven'
           
-      - name: Quick Dependency Scan
+      - name: Install Python dependencies
         run: |
-          echo "🔍 Starting fast dependency scan..."
+          python -m pip install --upgrade pip
+          pip install requests
           
-          # Check for Maven project - FAST SCAN
+      - name: Install Trivy (for Docker scanning)
+        if: inputs.scan-docker
+        run: |
+          sudo apt-get update
+          sudo apt-get install wget apt-transport-https gnupg lsb-release
+          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
+          echo "deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee -a /etc/apt/sources.list.d/trivy.list
+          sudo apt-get update
+          sudo apt-get install trivy
+          
+      - name: Run Dependency & Vulnerability Scan
+        run: |
+          echo "🔍 Starting dependency and vulnerability scan..."
+          
+          # Check for Maven project
           if [ "${{ inputs.scan-maven }}" == "true" ] && [ -f "pom.xml" ]; then
-            echo "📦 Quick Maven dependency check..."
+            echo "📦 Scanning Maven dependencies..."
             mvn --version
             mvn dependency:tree
-            echo "✅ Maven dependencies listed successfully"
+            # Add vulnerability scanning with OWASP dependency check
+            mvn org.owasp:dependency-check-maven:check -DfailBuildOnCVSS=7 || echo "Maven scan completed with warnings"
           fi
           
-          # Check for NPM project - FAST SCAN
+          # Check for NPM project  
           if [ "${{ inputs.scan-npm }}" == "true" ] && [ -f "package.json" ]; then
-            echo "📦 Quick NPM dependency check..."
+            echo "📦 Scanning NPM dependencies..."
             npm --version
-            if [ -f "package-lock.json" ]; then
-              npm ci --only=production
-            else
-              npm install --only=production
-            fi
-            npm audit --audit-level high || echo "NPM audit completed"
-            echo "✅ NPM dependencies checked successfully"
+            npm install
+            npm audit --audit-level moderate || echo "NPM audit completed with warnings"
           fi
           
-          # Quick Docker check (no image build)
+          # Check for Docker
           if [ "${{ inputs.scan-docker }}" == "true" ] && [ -f "Dockerfile" ]; then
-            echo "🐳 Quick Dockerfile validation..."
-            echo "Dockerfile found and validated"
-            echo "✅ Docker check completed"
+            echo "🐳 Scanning Docker image..."
+            docker build -t temp-scan-image .
+            trivy image temp-scan-image
           fi
           
-          echo "✅ Fast scan completed in under 5 minutes!"
+          echo "✅ Scan completed!"
           
       - name: Generate Scan Report
         run: |
